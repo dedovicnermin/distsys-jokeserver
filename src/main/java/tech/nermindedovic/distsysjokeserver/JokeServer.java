@@ -1,4 +1,4 @@
-package tech.nermindedovic;
+package tech.nermindedovic.distsysjokeserver;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -78,7 +78,7 @@ class Worker extends Thread {
     }
 }
 
-public class InetServer {
+public class JokeServer {
     public static void main(String[] a) throws IOException {
         final int max_buffered_conn = 6;             /* limit to number of requests that can be handled at once */
         final int port = 1565;

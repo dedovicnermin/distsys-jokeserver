@@ -1,4 +1,4 @@
-package tech.nermindedovic;
+package tech.nermindedovic.distsysjokeserver;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -6,10 +6,11 @@ import java.io.InputStreamReader;
 import java.io.PrintStream;
 import java.net.Socket;
 
-public class InetClient {
+
+public class JokeClient {
+
     public static void main (String[] args) {
-        /* determine if process was invoked with a server name to run on
-         or default to localhost */
+        /* determine if process was invoked with a server name to run on or default to localhost */
         final String serverName = (args.length < 1) ? "localhost" : args[0];
         System.out.println("Nermin Dedovic's Inet Client, 1.8.\n");
         System.out.println("Using server: " + serverName + ", Port: 1565");
@@ -19,7 +20,7 @@ public class InetClient {
         try {
             String name;
             do {
-                System.out.print("Enter a hostname or an IP address, (quit) to end: ");
+                System.out.print("Enter a username or (quit) to end: ");
                 System.out.flush ();            // flush stream of characters to System.out
                 name = in.readLine ();          // block until invoker sends an endpoint over from CLI
 
@@ -40,6 +41,7 @@ public class InetClient {
         /* Open a connection to server. Ensure port is the one that Server is currently running on
            and close connection when execution block complete or problems occur with socket resource */
         try (final Socket sock = new Socket(serverName, 1565)){
+            System.out.println(sock.toString());
             // instantiate to capture and hold data sent from server till ready to be accessed
             fromServer = new BufferedReader(new InputStreamReader(sock.getInputStream()));
             // instantiate to capture data we want to send to server and stream over once ready to be sent
@@ -60,3 +62,6 @@ public class InetClient {
         }
     }
 }
+
+
+
