@@ -63,7 +63,7 @@ class AdminWorker implements Runnable {
                 final Socket socket = new Socket(server, port);
                 final PrintStream toJokeServer = new PrintStream(socket.getOutputStream())      // reading from Server not necessary
         ) {
-            System.out.println("ClientAdminWorker connected! Sending ping to change mode.");
+            System.out.println("ClientAdminWorker[" + port +"] connected! Sending ping to change mode.");
             toJokeServer.println();     // PING
             toJokeServer.flush();
         } catch (IOException e) {
