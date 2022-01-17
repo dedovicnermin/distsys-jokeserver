@@ -6,10 +6,20 @@ import java.net.Socket;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.Predicate;
 
-import static java.util.Optional.ofNullable;
-
+/*-------------------------------------------------------------------------------
+1. Nermin Dedovic | Jan. 16 2022
+2. Java 11
+3. > javac JokeServer.java
+4. > java JokeServer
+   > java JokeServer secondary
+5. Running this process without command line arguments assumes user wants to
+   start application with default ports for both jokeServer and adminServer
+   listening socket connections.
+   If two arguments are passed, process is started using secondary ports. Does not
+   leverage data passed, as length of args only is important.
+   File can be run standalone, does not require extra config.
+ */
 
 class JokeServerWorker extends Thread {
     final Socket socket;
@@ -31,13 +41,29 @@ class JokeServerWorker extends Thread {
         }
     }
 
+
+    /**
+     * a.  take client UUID and retrieve from server state. If not found, start a new record for given UUID string
+     * b. create the key for client response
+     *      i.  get current modje
+     *      ii. get position for mode
+     *      iii. craft and return key using (mode, position) - expected response M:PositionForM (where M is current server mode)
+     * c. increment respective position (based on mode) for the client
+     * d. persist updated client state into server state
+     * e. send response to client
+     *
+     * @param in bufferedReader
+     * @param out
+     * @throws IOException
+     */
+
     private void handleJokeServerRequest(final BufferedReader in,final PrintStream out) throws IOException {
         final String clientId = in.readLine();                                      // client pipes UUID:String through
-        final boolean isNewClient = !JokeServer.CLIENT_POSITIONS.containsKey(clientId); // this was introduced after seeing  0 % 4 == 4. Needs to be distinction.
-        final Map<String, Integer> clientPositions = JokeServer.CLIENT_POSITIONS.getOrDefault(clientId, defaultMap());
-        final String response = retrieveKeyForClientResponse(clientPositions, isNewClient);      // JX | PX - where X is [A|B|C|D]
+        final JokeClientPositions clientPositions = JokeServer.getServerStateMap().getOrDefault(clientId, new JokeClientPositions(clientId));  // retrieve client state if key has been seen else start new slot for this client
 
-        JokeServer.CLIENT_POSITIONS.put(clientId, clientPositions);     // update server state. updated after retrieval.
+        final boolean currModeIsJoke = JokeServer.isJokeMode();
+        final String response = createResponseUsingCurrMode(clientPositions, currModeIsJoke);      // should be in format M(mode):N(position for respective mode)
+        updateServerState(clientPositions, currModeIsJoke);
 
         //send response + done
         System.out.println("SENDING SERVER RESPONSE=" + response + " - to client=" + clientId);
@@ -45,51 +71,61 @@ class JokeServerWorker extends Thread {
         out.flush();
     }
 
-    // in order to get an outcome of --> JX || PX (where X is A|B|C|D)
-    // we must get current mode --> J | P
-    // and the position for client in current mode --> 0-N
-    // We can send client the response needed for them to query --> JX | PX (Key) : Joke | Proverb (Value)
-    private static String retrieveKeyForClientResponse(final Map<String, Integer> clientPositions, final boolean newClient) {
-        final String modeKey = retrieveKeyBasedOnMode();
-        final Integer index = retrieveIndexBasedOnPositionValue(clientPositions.get(modeKey), newClient);
-        updateClientPosition(clientPositions, modeKey, index+1);
-        return modeKey + JokeServer.INDEX_TO_LETTER.get(index);
-    }
-
-    // randomizing the key for joke / proverb retrieve after seeing all jokes is (imo) more cost-effective than shuffling collection
-    private static Integer retrieveIndexBasedOnPositionValue(final int index, final boolean newClient) {
-        if (!newClient && index % JokeServer.INDEX_TO_LETTER.size() == 0) {
-            System.out.println("TIME TO RANDOMIZE");
-            return JokeServer.getRandomIndex();
+    // computes the response (its a key) that client will leverage once response arrives
+    private String createResponseUsingCurrMode(final JokeClientPositions clientPositions, final boolean currModeIsJoke) {
+        // returning string does not include updated version.
+        if (currModeIsJoke) {
+            return "J:" + clientPositions.getJokePosition();
+        } else {
+            return "P:" + clientPositions.getProverbPosition();
         }
-        return index;
+    }
+
+    // increment position based on curr mode and persist updated positions for client
+    private void updateServerState(final JokeClientPositions clientPositions, final boolean currModeIsJoke) {
+        if (currModeIsJoke) clientPositions.incrementJokePosition();
+        else { clientPositions.incrementProverbPosition(); }
+        JokeServer.getServerStateMap().put(clientPositions.getId(), clientPositions);
     }
 
 
-    private static void updateClientPosition(final Map<String, Integer> clientPositions, final String key, final int updatedIndex) {
-        clientPositions.put(key, updatedIndex);
+}
+
+
+class JokeClientPositions {
+    private final String id;
+    private int jokePosition = 0;
+    private int proverbPosition = 0;
+
+    public JokeClientPositions(String id) {
+        this.id = id;
     }
 
-
-    private static String retrieveKeyBasedOnMode() {
-        return JokeServer.isJokeMode() ? "J" : "P";
+    public String getId() {
+        return id;
     }
 
-    private static HashMap<String, Integer> defaultMap() {
-        final HashMap<String, Integer> defaultMap = new HashMap<>();
-        defaultMap.put("J", 0);
-        defaultMap.put("P", 0);
-        return defaultMap;
+    public int getJokePosition() {
+        return jokePosition;
+    }
+
+    public void incrementJokePosition() {
+        jokePosition++;
+    }
+
+    public int getProverbPosition() {
+        return proverbPosition;
+    }
+
+    public void incrementProverbPosition() {
+        proverbPosition++;
     }
 }
 
 
-
 public class JokeServer {
 
-    protected static final Map<String, Map<String, Integer>> CLIENT_POSITIONS = new ConcurrentHashMap<>();
-    protected static final List<String> INDEX_TO_LETTER = List.of("A", "B", "C", "D");
-    private static final Random RANDOM = new Random();
+    protected static final Map<String, JokeClientPositions> SERVER_STATE = new ConcurrentHashMap<>();
     protected static AtomicBoolean jokeMode = new AtomicBoolean(true);
     protected static AtomicBoolean serverIsUp = new AtomicBoolean(true);
 
@@ -107,23 +143,40 @@ public class JokeServer {
         jokeMode.set(updated);
     }
 
-    public static Integer getRandomIndex() {
-        return RANDOM.nextInt(INDEX_TO_LETTER.size());
+    public static Map<String, JokeClientPositions> getServerStateMap() {
+        return SERVER_STATE;
+    }
+
+    public static void setServerIsUp(boolean updated) {
+        serverIsUp.set(updated);
     }
 
 
 
-    public static void main(String[] a) throws IOException {
-        final int concurrent_resp_limit = 6;             /* limit to number of requests that can be handled at once */
-        final int port = 4545;
+    static final int JOKE_SERVER_DEFAULT_PORT = 4545;
+    static final int JOKE_SERVER_SECONDARY_PORT = 4546;
 
-        final AdminLooper adminLooper = new AdminLooper();
+    static final int ADMIN_SERVER_DEFAULT_PORT = 5050;
+    static final int ADMIN_SERVER_SECONDARY_PORT = 5051;
+
+
+
+
+    public static void main(String[] args) throws IOException {
+        final int concurrent_resp_limit = 6;             /* limit to number of requests that can be handled at once */
+        final int jokeServerPort = (args.length >= 1) ? JOKE_SERVER_SECONDARY_PORT : JOKE_SERVER_DEFAULT_PORT;                    // 'secondary' passed? use secondary port for both jokeServer and thread handling AdminClient requests
+        final int adminServerPort = (args.length >= 1) ? ADMIN_SERVER_SECONDARY_PORT : ADMIN_SERVER_DEFAULT_PORT;
+
+
+        final AdminLooper adminLooper = new AdminLooper(adminServerPort);
         final Thread adminServer = new Thread(adminLooper, "userThread:adminLooper");
         adminServer.start();
 
 
-        System.out.println("Nermin Dedovic'c Joke server starting up at port 4545.");
-        try (final ServerSocket serverSocket = new ServerSocket(port, concurrent_resp_limit)) {
+        System.out.println("Nermin Dedovic'c Joke server starting up at port=" + jokeServerPort);
+        System.out.println(); //EMPTY LINE
+
+        try (final ServerSocket serverSocket = new ServerSocket(jokeServerPort, concurrent_resp_limit)) {
             while (continueServer()) {
                 final Socket connectedSocket = serverSocket.accept();
                 new JokeServerWorker(connectedSocket).start();
@@ -134,25 +187,31 @@ public class JokeServer {
 
 }
 
-
-
-// TODO : implement server side listener that will flip the mode switch
+/*
+Listens to socket connections at admin port.
+Spawns worker threads to handle request and returns to serving others
+Each instance should have its own AtomicBoolean
+ */
 class AdminLooper implements Runnable {
-    public static boolean adminControlSwitch = true;
+    public final AtomicBoolean adminControlSwitch;      // thread safe. get/set is an atomic action
+    private final int port;
+
+    public AdminLooper(int port) {
+        adminControlSwitch = new AtomicBoolean(true);
+        this.port = port;
+    }
 
 
     @Override
     public void run() {
-        System.out.println("In the admin looper thread"); //not me
-        int q_len = 6;
-        int port = 5050;
+        int concurrent_limit = 6; // 6 max at the same exact instance, else throw away rest
 
 
-        try (final ServerSocket serverSocket = new ServerSocket(port, q_len)){
-
-            while (adminControlSwitch) {
+        System.out.println("AdminLooper Thread listening to incoming connections on port="+port);
+        try (final ServerSocket serverSocket = new ServerSocket(this.port, concurrent_limit)){
+            while (adminControlSwitch.get()) {
                 final Socket connection = serverSocket.accept();
-                new JokeServerAdminWorker(connection).start();
+                new JokeServerAdminWorker(connection, adminControlSwitch).start();
             }
         } catch (IOException e) {
             e.printStackTrace();
@@ -163,22 +222,37 @@ class AdminLooper implements Runnable {
 
 class JokeServerAdminWorker extends Thread {
     final Socket socket;
+    final AtomicBoolean controlSwitch;
 
-    public JokeServerAdminWorker(Socket socket) {
+    public JokeServerAdminWorker(Socket socket, final AtomicBoolean controlSwitch) {
         this.socket = socket;
+        this.controlSwitch = controlSwitch;
+    }
+
+    // stop admin looper thread
+    public void setAdminControlSwitch(final boolean updated) {
+        controlSwitch.set(updated);
     }
 
     @Override
     public void run() {
         try (
-                final BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-                final PrintWriter out = new PrintWriter(socket.getOutputStream())
+                final BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()))
         ){
-            final String s = in.readLine();         // <Enter> should == null. Have not implemented shutdown functionality yet
-            final boolean currentMode = JokeServer.isJokeMode();
-            JokeServer.setJokeMode(!currentMode);        // opposite mode
+            final String s = in.readLine();         // <Enter> should == null if they want to switch mode. Else, check for shut down, allowing admin client to shut down server and this thread
+
+            if (Objects.nonNull(s) && s.equals("shutdown")) {
+                setAdminControlSwitch(false);                       // shut down instance of looper thread on next iteration
+                JokeServer.setServerIsUp(false);                    // shut down server of joke server
+                return;
+            }
+            final boolean currModeIsJokeMode = JokeServer.isJokeMode();
+            JokeServer.setJokeMode(!currModeIsJokeMode);        // opposite mode
+            System.out.println("MODE SWITCH. Server is in mode " + (currModeIsJokeMode ? "PROVERB" : "JOKE"));     // if we went from J->P, first stmnt else : second stmnt.
         } catch (IOException e) {
             System.out.println(e.getMessage());
+        } finally {
+            this.interrupt();
         }
     }
 }
